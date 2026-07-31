@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全球各大区直播数据可视化看板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <!-- 引入 SheetJS 用于在前端极速解析 Excel -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <style>
+        /* 强制定义 6.3厘米宽 × 16.3厘米高 的全新物理外框 */
+        .chart-box {
+            width: 6.3cm;
+            height: 16.3cm;
+            position: relative;
+            overflow: hidden;
+            background-color: #ffffff;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        
+        /* 内部画布：根据 6.3cm x 16.3cm 重新精算得出 1905px x 4930px，缩放比例 0.125 (8倍超采样) */
+        .chart-inner {
+            width: 1905px;
+            height: 4930px;
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scale(0.125);
+            transform-origin: top left;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen p-8 font-sans">
+    
+    <div class="max-w-[1600px] mx-auto">
+        <h1 class="text-3xl font-bold text-center text-slate-800 mb-2">全球多大区 直播核心数据看板</h1>
+        <p class="text-center text-slate-500 mb-6" id="dashboard-subtitle">包含大盘、PGC及UGC数据分析</p>
+
+        <!-- 操作区：数据导入 -->
+        <div class="flex justify-center mb-10">
+            <label class="px-6 py-3 bg-[#10b981] hover:bg-[#059669] text-white text-sm font-bold rounded-lg shadow-lg cursor-pointer transition-colors flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                导入 Excel 数据 (自动生成图表)
+                <input type="file" id="excel-upload" class="hidden" accept=".xlsx, .xls">
+            </label>
+        </div>
+
+        <!-- 组合长图展示区 -->
+        <div id="charts-container" class="flex flex-wrap justify-center items-start gap-12">
+            <!-- 图表将通过 JavaScript 动态注入此处 -->
+        </div>
+
+        <div class="mt-16 text-sm text-slate-400 text-center max-w-2xl mx-auto">
+            <p>* 注：看板物理尺寸均精确设定为宽 6.3厘米、高 16.3厘米。您可以随时上传最新的 Excel 数据进行覆盖渲染，下方专属按钮支持一键导出对应的超高清合并长图。</p>
+        </div>
+    </div>
+
+    <script>
+        // 声明全局变量，以便在上传文件后被覆写更新
+        let xAxisData = ['2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05'];
+        let regionsData = []; // 初始清空，等待上传或使用下面的默认数据
+        const myCharts = {};
+
+        // 【修复】智能判断百分比，并强制保留两位小数，消灭浮点数长尾（如 16.00999999%）
+        function parsePercent(val) {
+            let num = 0;
+            if (typeof val === 'number') {
+                num = val < 1 && val > -1 && val !== 0 ? val * 100 : val;
+            } else if (typeof val === 'string') {
+                let parsed = parseFloat(val.replace(/[%,]/g, ''));
+                if (!val.includes('%') && parsed < 1 && parsed > -1 && parsed !== 0) {
+                    parsed = parsed * 100;
+                }
+                num = parsed;
+            }
+            // 使用 toFixed(2) 截断长尾，然后用 parseFloat 转回纯数字类型
+            return parseFloat(num.toFixed(2));
+        }
+
+        function parseNum(val) {
+            if (typeof val === 'number') return val;
+            if (typeof val === 'string') return parseInt(val.replace(/[, ]/g, ''), 10);
+            return 0;
+        }
+
+        // 【新增】Excel 日期序列号转 YYYY-MM 格式（解决横轴显示 45992 等数字的问题）
+        function formatExcelDate(val) {
+            if (typeof val === 'number') {
+                // Excel 的 1 代表 1900-01-01 (需扣除 Excel 1900 闰年 bug 的 2 天差值)
+                const date = new Date((val - (25567 + 2)) * 86400 * 1000); 
+                const y = date.getFullYear();
+                const m = String(date.getMonth() + 1).padStart(2, '0');
+                return `${y}-${m}`;
+            }
+            // 如果已经是字符串，比如 "2025年12月"，直接清理中文
+            if (typeof val === 'string') {
+                return val.replace('年', '-').replace('月', '').trim();
+            }
+            return String(val);
+        }
+
+        // 监听 Excel 文件上传事件
+        document.getElementById('excel-upload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const data = new Uint8Array(evt.target.result);
+                // raw: true 确保读取到原始值（包括日期序列号数字），而不是未知的字符串
+                const workbook = XLSX.read(data, { type: 'array', raw: true });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                
+                // 将 Excel 表格转换为二维数组方便按行索引
+                const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+                processExcelData(jsonRows);
+            };
+            reader.readAsArrayBuffer(file);
+            
+            // 重置 input，允许重复点击上传同一文件
+            e.target.value = '';
+        });
+
+        // 核心解析逻辑：遍历二维数组提取所有大区
+        function processExcelData(rows) {
+            let newRegionsData = [];
+            let newXAxisData = [];
+
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row || row.length === 0) continue;
+
+                const firstCell = String(row[0]).trim();
+                
+                // 识别大区标题行（排除常见的数据行标题和空行）
+                if (firstCell && !['大盘', '主播违规率', '开播数', '违规数', '违规率双月环比'].includes(firstCell) && !firstCell.includes('环比')) {
+                    // 确保下方有足够的数据行
+                    if (i + 4 < rows.length) {
+                        const regionName = firstCell;
+                        const headerRow = rows[i+1];
+                        const rateRow = rows[i+2];
+                        const broadcastRow = rows[i+3];
+                        const violationRow = rows[i+4];
+                        const qoqRow = rows[i+5] || [];
+
+                        // 仅抓取一次时间表头用于全局 X 轴，并格式化可能存在的数字日期
+                        if (newXAxisData.length === 0) {
+                            newXAxisData = headerRow.slice(1, 7).map(formatExcelDate);
+                        }
+
+                        // 【新增】：智能动态定位 PGC 和 UGC 的真实起始列，防止 Excel 空白间隔列导致的错位
+                        let pgcStartCol = 9;
+                        let ugcStartCol = 17;
+                        for(let c = 0; c < headerRow.length; c++) {
+                            const hVal = String(headerRow[c]).trim().toUpperCase();
+                            if(hVal === 'PGC') pgcStartCol = c + 1;
+                            if(hVal === 'UGC') ugcStartCol = c + 1;
+                        }
+
+                        // 辅助函数：连续提取 6 个月的数据
+                        const extractArr = (r, startCol) => {
+                            const arr = [];
+                            for(let c = 0; c < 6; c++) arr.push(parseNum(r[startCol + c]));
+                            return arr;
+                        };
+                        const extractRateArr = (r, startCol) => {
+                            const arr = [];
+                            for(let c = 0; c < 6; c++) arr.push(parsePercent(r[startCol + c]));
+                            return arr;
+                        };
+
+                        // 使用动态识别的正确列索引提取数据
+                        const totalData = {
+                            broadcast: extractArr(broadcastRow, 1),
+                            violation: extractArr(violationRow, 1),
+                            rate: extractRateArr(rateRow, 1),
+                            qoq: 0
+                        };
+                        const pgcData = {
+                            broadcast: extractArr(broadcastRow, pgcStartCol),
+                            violation: extractArr(violationRow, pgcStartCol),
+                            rate: extractRateArr(rateRow, pgcStartCol),
+                            qoq: 0
+                        };
+                        const ugcData = {
+                            broadcast: extractArr(broadcastRow, ugcStartCol),
+                            violation: extractArr(violationRow, ugcStartCol),
+                            rate: extractRateArr(rateRow, ugcStartCol),
+                            qoq: 0
+                        };
+
+                        // 提取双月环比（扫描各区块所在的真实列范围，防止偏移）
+                        for (let c = 1; c <= 7; c++) if (qoqRow[c] && String(qoqRow[c]).match(/[\d.-]/)) totalData.qoq = parsePercent(qoqRow[c]);
+                        for (let c = pgcStartCol; c <= pgcStartCol + 6; c++) if (qoqRow[c] && String(qoqRow[c]).match(/[\d.-]/)) pgcData.qoq = parsePercent(qoqRow[c]);
+                        for (let c = ugcStartCol; c <= ugcStartCol + 6; c++) if (qoqRow[c] && String(qoqRow[c]).match(/[\d.-]/)) ugcData.qoq = parsePercent(qoqRow[c]);
+
+                        newRegionsData.push({
+                            id: 'region_' + Math.random().toString(36).substr(2, 9), 
+                            name: regionName,
+                            qoqLabel: '违规率双月环比',
+                            totalData: totalData,
+                            pgcData: pgcData,
+                            ugcData: ugcData
+                        });
+                        
+                        i += 5; // 跳过已解析的块
+                    }
+                }
+            }
+
+            if (newRegionsData.length > 0) {
+                // 覆写全局数据
+                xAxisData = newXAxisData;
+                regionsData = newRegionsData;
+                
+                // 更新副标题时间范围
+                if(xAxisData.length > 0) {
+                    document.getElementById('dashboard-subtitle').innerText = `${xAxisData[0]} - ${xAxisData[xAxisData.length-1]} | 包含大盘、PGC及UGC数据分析`;
+                }
+
+                // 清理旧视图与旧 Echarts 实例
+                document.getElementById('charts-container').innerHTML = '';
+                for (let key in myCharts) {
+                    if (myCharts[key]) myCharts[key].dispose();
+                    delete myCharts[key];
+                }
+                
+                renderAllCharts(); // 重新渲染页面图表
+                alert(`成功导入并解析了 ${newRegionsData.length} 个大区的数据！`);
+            } else {
+                alert('解析失败：未能在 Excel 中识别到符合规范的数据块，请检查文件格式是否与之前一致。');
+            }
+        }
+
+
+        // =========== 图表渲染底层模型 (保持防重叠放大策略) ===========
+        function getQoQConfig(qoqValue) {
+            let qoqSymbol = '', qoqColor = '';
+            if (qoqValue < 0) { 
+                qoqSymbol = '↓ '; qoqColor = '#10b981'; 
+            } else if (qoqValue > 0) {
+                qoqSymbol = '↑ '; qoqColor = '#ef4444'; 
+            } else {
+                qoqSymbol = '- '; qoqColor = '#2e95db'; 
+            }
+            return { symbol: qoqSymbol, color: qoqColor };
+        }
+
+        function createQoQGraphic(topPos, qoqValue, labelText) {
+            const config = getQoQConfig(qoqValue);
+            return {
+                type: 'group',
+                left: 80, 
+                top: topPos,
+                children: [
+                    { type: 'text', style: { text: labelText, fontSize: 40, fill: '#64748b' } }, 
+                    { type: 'text', top: 55, style: { text: config.symbol + Math.abs(qoqValue).toFixed(2) + '%', fontSize: 60, fontWeight: 'bold', fill: config.color } } 
+                ]
+            };
+        }
+
+        function getBarYAxis(gridIndex) {
+            return {
+                gridIndex: gridIndex,
+                type: 'value',
+                name: '数量',
+                nameTextStyle: { fontSize: 42, color: '#64748b', padding: [0, 80, 20, 0] }, 
+                axisLabel: { 
+                    fontSize: 36, color: '#64748b',
+                    formatter: value => value >= 1000 ? (value / 1000).toFixed(0) + 'k' : value 
+                },
+                splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
+                max: value => Math.ceil(value.max * 2.5) 
+            };
+        }
+
+        function getLineYAxis(gridIndex) {
+            return {
+                gridIndex: gridIndex,
+                type: 'value',
+                name: '违规率 (%)',
+                nameTextStyle: { fontSize: 42, color: '#64748b', padding: [0, 0, 20, 80] }, 
+                splitLine: { show: false },
+                max: value => {
+                    let r = value.max - value.min;
+                    if (r === 0) r = value.max * 0.1 || 1;
+                    return parseFloat((value.max + r * 3).toFixed(2));
+                },
+                min: value => {
+                    let r = value.max - value.min;
+                    if (r === 0) r = value.max * 0.1 || 1;
+                    let m = value.min - r * 3.5;
+                    return parseFloat(m.toFixed(2));
+                },
+                axisLabel: {
+                    fontSize: 36, color: '#64748b',
+                    formatter: value => value < 0 ? '' : value.toFixed(1) + '%' 
+                }
+            };
+        }
+
+        function createSeriesData(dataObj, xIndex, yIndex1, yIndex2, isASR = false) {
+            const violationData = dataObj.violation;
+            const broadcastData = dataObj.broadcast;
+            const compliantData = broadcastData.map((val, index) => val - violationData[index]);
+
+            return [
+                {
+                    name: '违规数',
+                    type: 'bar',
+                    xAxisIndex: xIndex,
+                    yAxisIndex: yIndex1,
+                    stack: '总量' + xIndex,
+                    barWidth: 125, // 【适配窄画板】：放大的柱子
+                    itemStyle: { color: '#2e95db', borderRadius: [0, 0, 8, 8] },
+                    label: {
+                        show: true, position: 'inside', color: isASR ? '#000000' : '#ffffff', 
+                        fontSize: 48, fontWeight: 'bold', 
+                        formatter: function(params) {
+                            let v = params.value; return v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v;
+                        },
+                        textBorderColor: isASR ? '#ffffff' : '#2e95db', textBorderWidth: 4
+                    },
+                    data: violationData
+                },
+                {
+                    name: '开播数',
+                    type: 'bar',
+                    xAxisIndex: xIndex,
+                    yAxisIndex: yIndex1,
+                    stack: '总量' + xIndex,
+                    barWidth: 125, 
+                    itemStyle: { color: '#ffffff', borderColor: '#2e95db', borderWidth: 4, borderRadius: [8, 8, 0, 0] },
+                    label: {
+                        show: true, position: 'insideTop', color: '#1e293b', 
+                        fontSize: 52, fontWeight: 'bold', distance: 20, 
+                        formatter: function(params) { 
+                            let v = broadcastData[params.dataIndex]; return v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v;
+                        },
+                        textBorderColor: '#ffffff', textBorderWidth: 6
+                    },
+                    data: compliantData
+                },
+                {
+                    name: '主播违规率',
+                    type: 'line',
+                    xAxisIndex: xIndex,
+                    yAxisIndex: yIndex2,
+                    symbol: 'circle',
+                    symbolSize: 60, // 【放大圆点】
+                    itemStyle: { color: '#0f5b99', borderColor: '#ffffff', borderWidth: 6 },
+                    lineStyle: { width: 12, color: '#0f5b99' }, 
+                    label: {
+                        show: true, position: 'top', color: '#0f5b99', 
+                        fontSize: 56, // 【放大标签】
+                        fontWeight: '900', distance: 20, 
+                        formatter: '{c}%', textBorderColor: '#ffffff', textBorderWidth: 10 
+                    },
+                    data: dataObj.rate
+                }
+            ];
+        }
+
+        function initCombinedChart(domId, region) {
+            const chartDom = document.getElementById(domId);
+            const myChart = echarts.init(chartDom, null, { devicePixelRatio: 2 });
+            myCharts[region.id] = myChart;
+
+            const isASR = false; // 用户自传数据默认不需要非ASR反色逻辑
+
+            const gridHeight = 1080; 
+            const yOffsetChart1 = 560;  
+            const yOffsetChart2 = 2160; 
+            const yOffsetChart3 = 3760; 
+
+            const option = {
+                backgroundColor: '#ffffff',
+                title: [
+                    { text: region.name, left: 'center', top: 50, textStyle: { color: '#1e293b', fontSize: 110, fontWeight: 900 } }, 
+                    { text: '大盘 违规趋势', left: 'center', top: 280, textStyle: { color: '#2e95db', fontSize: 68, fontWeight: 'bold' } }, 
+                    { text: 'PGC 违规趋势', left: 'center', top: 1880, textStyle: { color: '#2e95db', fontSize: 68, fontWeight: 'bold' } },
+                    { text: 'UGC 违规趋势', left: 'center', top: 3480, textStyle: { color: '#2e95db', fontSize: 68, fontWeight: 'bold' } }
+                ],
+                legend: [
+                    { data: ['违规数', '开播数', '主播违规率'], top: 400, textStyle: { fontSize: 44, color: '#475569' }, itemGap: 50 }, 
+                    { data: ['违规数', '开播数', '主播违规率'], top: 2000, textStyle: { fontSize: 44, color: '#475569' }, itemGap: 50 },
+                    { data: ['违规数', '开播数', '主播违规率'], top: 3600, textStyle: { fontSize: 44, color: '#475569' }, itemGap: 50 }
+                ],
+                graphic: [
+                    createQoQGraphic(280, region.totalData.qoq, region.qoqLabel || '违规率季环比'),
+                    createQoQGraphic(1880, region.pgcData.qoq, region.qoqLabel || '违规率季环比'),
+                    createQoQGraphic(3480, region.ugcData.qoq, region.qoqLabel || '违规率季环比')
+                ],
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontSize: 48 } },
+                grid: [
+                    { top: yOffsetChart1, height: gridHeight, left: 220, right: 220, containLabel: false },
+                    { top: yOffsetChart2, height: gridHeight, left: 220, right: 220, containLabel: false },
+                    { top: yOffsetChart3, height: gridHeight, left: 220, right: 220, containLabel: false }
+                ],
+                xAxis: [
+                    { gridIndex: 0, type: 'category', data: xAxisData, axisLabel: { fontSize: 42, color: '#64748b', interval: 0 }, axisLine: { lineStyle: { color: '#cbd5e1' } }, axisTick: { show: false } },
+                    { gridIndex: 1, type: 'category', data: xAxisData, axisLabel: { fontSize: 42, color: '#64748b', interval: 0 }, axisLine: { lineStyle: { color: '#cbd5e1' } }, axisTick: { show: false } },
+                    { gridIndex: 2, type: 'category', data: xAxisData, axisLabel: { fontSize: 42, color: '#64748b', interval: 0 }, axisLine: { lineStyle: { color: '#cbd5e1' } }, axisTick: { show: false } }
+                ],
+                yAxis: [
+                    getBarYAxis(0), getLineYAxis(0),
+                    getBarYAxis(1), getLineYAxis(1),
+                    getBarYAxis(2), getLineYAxis(2)
+                ],
+                series: [
+                    ...createSeriesData(region.totalData, 0, 0, 1, isASR),
+                    ...createSeriesData(region.pgcData, 1, 2, 3, isASR),
+                    ...createSeriesData(region.ugcData, 2, 4, 5, isASR)
+                ]
+            };
+
+            myChart.setOption(option);
+        }
+
+        function renderAllCharts() {
+            const container = document.getElementById('charts-container');
+            
+            regionsData.forEach(region => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'flex flex-col items-center group';
+                
+                wrapper.innerHTML = `
+                    <div class="chart-box mb-4">
+                        <div id="chart-${region.id}" class="chart-inner"></div>
+                    </div>
+                    <button onclick="downloadChart('${region.id}', '${region.name}')" class="px-5 py-2.5 bg-[#2e95db] hover:bg-[#257ab5] text-white text-sm font-medium rounded-full shadow-lg transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        下载 ${region.name} 长图
+                    </button>
+                `;
+                container.appendChild(wrapper);
+
+                initCombinedChart(`chart-${region.id}`, region);
+            });
+        }
+
+        // =======================
+        // 初始化：设置一个默认占位数据，让用户一进来能看到效果
+        // =======================
+        regionsData = [
+            {
+                id: 'demo_region', name: '美洲大区大盘 (示例)', qoqLabel: '违规率双月环比',
+                totalData: { broadcast: [152285, 158975, 160340, 161447, 159740, 159210], violation: [29757, 30886, 31746, 32569, 32837, 32864], rate: [19.54, 19.42, 19.80, 20.17, 20.55, 20.64], qoq: 0.61 },
+                pgcData: { broadcast: [67847, 70405, 73103, 74764, 75995, 76532], violation: [18087, 18552, 19578, 20388, 21023, 21587], rate: [26.65, 26.34, 26.78, 27.27, 27.66, 28.21], qoq: 0.91 },
+                ugcData: { broadcast: [84438, 88569, 87237, 86684, 83745, 82678], violation: [11669, 12334, 12169, 12181, 11815, 11277], rate: [13.82, 13.92, 13.94, 14.05, 14.10, 13.63], qoq: -0.13 }
+            }
+        ];
+        renderAllCharts();
+
+        function downloadChart(regionId, regionName) {
+            const chart = myCharts[regionId];
+            if(!chart) return;
+            
+            const dataURL = chart.getDataURL({
+                type: 'png',
+                pixelRatio: 2, 
+                backgroundColor: '#ffffff'
+            });
+
+            // 动态读取当前的月份后缀
+            const timeSuffix = xAxisData.length > 0 ? `${xAxisData[0].replace('-','')}_${xAxisData[xAxisData.length-1].replace('-','')}` : '数据';
+            
+            const a = document.createElement('a');
+            a.href = dataURL;
+            a.download = `${regionName}_合并数据长图看板_${timeSuffix}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    </script>
+</body>
+</html>
