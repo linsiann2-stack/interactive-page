@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高定版违规数据监控面板工具 - 批量版</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        :root {
+            --primary: #2e95db;
+            --primary-light: #e8f4fd;
+            --bg: #ffffff; 
+            --card-bg: #ffffff;
+            --inner-bg: #f8fbff;
+            --text-main: #0a1118;
+            --text-sec: #2c3e50;
+            --border: #dbe7f0;
+            --up: #e74c3c;     
+            --down: #27ae60;   
+            --neu: #7f8c8d;    
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { display: flex; background-color: #f0f4f8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; min-height: 100vh; }
+        
+        /* 侧边栏与控制台 */
+        .sidebar { width: 350px; background: #fff; padding: 30px; box-shadow: 2px 0 15px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 20px; z-index: 10; flex-shrink: 0; overflow-y: auto; }
+        .sidebar h2 { font-size: 20px; color: var(--text-main); margin-bottom: 5px; }
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        .control-group label { font-size: 14px; font-weight: 600; color: var(--text-sec); }
+        .control-group input[type="file"], .control-group input[type="number"], .control-group select { padding: 10px; border: 1px solid #ccd6e0; border-radius: 8px; font-size: 14px; width: 100%; outline: none; background: white; }
+        .size-inputs { display: flex; gap: 10px; align-items: center; }
+        .size-inputs span { color: #8da9c2; }
+        
+        .btn-primary { padding: 12px 16px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; transition: 0.2s; display: flex; justify-content: center; align-items: center; gap: 8px; }
+        .btn-primary:hover { background: #237bb8; }
+        .btn-primary:disabled { background: #a0c9e6; cursor: not-allowed; }
+        .btn-success { background: #27ae60; }
+        .btn-success:hover { background: #219653; }
+        .btn-success:disabled { background: #9bdba9; }
+
+        .instructions { font-size: 12px; color: #7f8c8d; background: #f8fbff; padding: 12px; border-radius: 8px; line-height: 1.6; }
+
+        /* 主画板外壳 */
+        .main-content { flex: 1; padding: 40px; display: flex; justify-content: center; align-items: flex-start; overflow-y: auto; }
+        
+        /* 物理画板 */
+        .physical-card { background: transparent; box-shadow: 0 10px 40px rgba(46, 149, 219, 0.2); overflow: hidden; position: relative; border-radius: 12px; transition: width 0.3s, min-height 0.3s; background: white; display: flex; flex-direction: column; }
+        
+        /* 核心黑科技：全动态流式纵向填充布局 */
+        #exportTarget {
+            --u: 1px; /* 结构比例单位 (Structure Scale) */
+            --f: 1px; /* 字体比例单位 (Font Scale) - 智能动态计算 */
+            flex: 1; 
+            width: 100%; min-height: 100%; background: var(--bg); 
+            padding: calc(24 * var(--u)) calc(28 * var(--u)); 
+            display: flex; flex-direction: column; gap: calc(20 * var(--u)); 
+            color: var(--text-main);
+        }
+
+        /* 统一数字字体规范 */
+        .num-font { font-family: 'Arial', 'Helvetica', sans-serif; letter-spacing: -0.5px; }
+
+        /* 顶部大盘 */
+        .header-compact { display: flex; align-items: center; justify-content: space-between; background: var(--card-bg); padding: calc(16 * var(--u)) calc(24 * var(--u)); border-radius: calc(20 * var(--u)); border: calc(3 * var(--u)) solid var(--border); min-height: calc(100 * var(--u)); flex-shrink: 0; gap: calc(20 * var(--u)); }
+        .region { font-size: calc(44 * var(--f)); font-weight: 900; color: var(--text-main); flex: 1; line-height: 1.1; white-space: normal; }
+        .metrics-group { display: flex; gap: calc(24 * var(--u)); flex-shrink: 0; }
+        .metric-item { display: flex; flex-direction: column; align-items: flex-end; gap: calc(4 * var(--u)); }
+        .metric-title { font-size: calc(18 * var(--f)); color: var(--text-sec); font-weight: 800; }
+        .metric-row { display: flex; align-items: center; gap: calc(8 * var(--u)); }
+        .metric-val { font-size: calc(44 * var(--f)); font-weight: 900; color: var(--primary); }
+        
+        /* 趋势标签样式 */
+        .t-trend { padding: calc(6 * var(--f)) calc(12 * var(--f)); border-radius: calc(12 * var(--f)); font-size: calc(22 * var(--f)); font-weight: 900; white-space: nowrap; }
+        .t-trend.neu { color: #5c758e; background: #e9f2fa; }
+        
+        /* 优化：加强百分比列的右侧对齐并防挤压 */
+        .pct { 
+            font-size: calc(24 * var(--f)); 
+            font-weight: 900; 
+            min-width: calc(125 * var(--f)); 
+            text-align: right; 
+            flex-shrink: 0; 
+            white-space: nowrap; 
+        }
+        
+        .t-down { color: var(--down); }
+        .t-up { color: var(--up); }
+        .t-neu-text { color: var(--neu); }
+
+        /* 主体模块 */
+        .section { background: var(--card-bg); border-radius: calc(24 * var(--u)); padding: calc(18 * var(--u)) calc(24 * var(--u)); border: calc(3 * var(--u)) solid var(--border); display: flex; flex-direction: column; gap: calc(16 * var(--u)); overflow: hidden; flex: 1; }
+        .section-head { display: flex; align-items: center; justify-content: space-between; border-bottom: calc(3 * var(--u)) dashed var(--border); padding-bottom: calc(10 * var(--u)); margin-bottom: calc(4 * var(--u)); flex-shrink: 0; }
+        .badge { background: var(--primary); color: white; padding: calc(8 * var(--f)) calc(16 * var(--f)); border-radius: calc(16 * var(--f)); font-size: calc(32 * var(--f)); font-weight: 900; display: inline-flex; align-items: center; gap: calc(12 * var(--f)); }
+        .badge svg { width: calc(36 * var(--f)); height: calc(36 * var(--f)); } 
+        .badge.high-value { background: #1b689e; }
+        
+        /* 分类 */
+        .category { display: flex; flex-direction: column; gap: calc(8 * var(--u)); flex: 1; }
+        .cat-title { font-size: calc(26 * var(--f)); font-weight: 900; display: flex; align-items: center; gap: calc(10 * var(--f)); }
+        .cat-title svg { width: calc(28 * var(--f)); height: calc(28 * var(--f)); } 
+        .cat-title.baseline { color: #e74c3c; }
+        .cat-title.eco { color: #27ae60; }
+
+        /* 表格区域：优化网格比例，右侧包含百分比给多一点空间 (1fr vs 1.55fr) 确保不溢出 */
+        .compare-area { display: grid; grid-template-columns: 1fr calc(30 * var(--f)) 1.55fr; background: var(--inner-bg); border-radius: calc(18 * var(--u)); padding: calc(12 * var(--u)) calc(18 * var(--u)); border: calc(3 * var(--u)) solid #eef5fb; gap: calc(8 * var(--u)); align-items: stretch; flex: 1; }
+        .col { display: flex; flex-direction: column; gap: calc(4 * var(--u)); min-width: 0; }
+        .col-title { text-align: center; font-size: calc(20 * var(--f)); color: #1a2b3c; background: #e9f2fa; border-radius: calc(40 * var(--f)); padding: calc(6 * var(--f)) 0; margin-bottom: calc(4 * var(--u)); font-weight: 800; }
+        .arrow-sep { display: flex; align-items: center; justify-content: center; color: #9ab9d4; }
+        .arrow-sep svg { width: calc(36 * var(--f)); height: calc(36 * var(--f)); }
+
+        /* 表格单行：右侧增加一点 padding 安全距离，防止紧贴容器 */
+        .row { display: flex; align-items: center; gap: calc(6 * var(--u)); min-height: calc(48 * var(--u)); padding: 0 calc(6 * var(--u)) 0 calc(2 * var(--u)); flex: 1; }
+        .idx { font-size: calc(24 * var(--f)); font-weight: 900; color: #8da9c2; width: calc(24 * var(--f)); text-align: center; flex-shrink: 0; }
+        
+        /* 标签：统一字号，不设省略号，同行展示 */
+        .lbl { 
+            flex: 1; 
+            font-size: calc(23 * var(--f)); 
+            color: #0a1118; 
+            font-weight: 800; 
+            white-space: nowrap; 
+        }
+        
+        .val { font-weight: 900; font-size: calc(36 * var(--f)); color: var(--primary); flex-shrink: 0; text-align: right; min-width: calc(44 * var(--f)); }
+        .footer-note { font-size: calc(18 * var(--f)); color: #8da9c2; font-weight: 800; margin-top: auto; padding-left: calc(8 * var(--u)); padding-bottom: calc(4 * var(--u)); flex-shrink: 0; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>违规数据监控 (批量版)</h2>
+        
+        <div class="control-group">
+            <label>1. 上传报表 (Excel)</label>
+            <input type="file" id="excelFile" accept=".xlsx, .xls">
+        </div>
+
+        <div class="control-group">
+            <label>2. 选择查看大区</label>
+            <select id="regionSelect" disabled onchange="switchRegion()">
+                <option value="-1">请先上传表格...</option>
+            </select>
+        </div>
+        
+        <div class="control-group">
+            <label>3. 导出图片尺寸 (可自定义)</label>
+            <div class="size-inputs">
+                <input type="number" id="canvasW" value="1000" step="10">
+                <span style="color: #8da9c2;">宽 × 高</span>
+                <input type="number" id="canvasH" value="1650" step="10">
+            </div>
+            <div class="instructions" style="margin-top:0;">💡 提示：系统启用了<b>双轨缩放</b>。遇到细高尺寸时，不仅行距会舒展，<b>字体大小也会在安全范围内智能放大</b>，拒绝局促！</div>
+        </div>
+
+        <button class="btn-primary" id="downloadBtn" onclick="downloadHDImage()" disabled>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            导出当前预览大图
+        </button>
+
+        <button class="btn-primary btn-success" id="batchBtn" onclick="downloadAllHDImages()" disabled>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M12 18v-6M9 15l3 3 3-3"></path></svg>
+            批量导出所有大区大图
+        </button>
+    </div>
+
+    <div class="main-content">
+        <div class="physical-card" id="physicalCard">
+            <div id="exportTarget">
+                <div id="dashboardContent" style="display:flex; justify-content:center; align-items:center; height:100%; font-size:24px; color:#8da9c2; font-weight: bold;">请在左侧上传表格 (支持多国家混合排版)</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const LOGICAL_W = 1000, LOGICAL_H = 1650;
+        let parsedRegions = []; 
+        let currentRegionIndex = 0;
+
+        function initCanvasControl() {
+            const wInput = document.getElementById('canvasW');
+            const hInput = document.getElementById('canvasH');
+            if (!wInput || !hInput) return;
+            
+            const updateScale = () => {
+                let w = parseFloat(wInput.value);
+                let h = parseFloat(hInput.value);
+                if (isNaN(w) || w <= 0) w = 1000;
+                if (isNaN(h) || h <= 0) h = 1650;
+
+                const card = document.getElementById('physicalCard');
+                const target = document.getElementById('exportTarget');
+                
+                if (card) {
+                    card.style.width = w + 'px'; 
+                    card.style.minHeight = h + 'px'; 
+                }
+                
+                if (target) {
+                    // 1. 计算基础横向比例 (控制结构、内边距)
+                    const baseScale = w / LOGICAL_W; 
+                    
+                    // 2. 计算智能字体缩放比例
+                    // 根据高宽比 (h/w) 和标准高宽比 (1.65) 对比
+                    let fontMultiplier = (h / w) / 1.65;
+                    // 安全锁：最大放大倍数为 1.28（实测不会溢出横向宽度的极限安全值），最小为 0.85
+                    fontMultiplier = Math.min(1.28, Math.max(0.85, fontMultiplier));
+                    
+                    target.style.setProperty('--u', baseScale + 'px');
+                    target.style.setProperty('--f', (baseScale * fontMultiplier) + 'px');
+                }
+            };
+            wInput.addEventListener('input', updateScale); 
+            hInput.addEventListener('input', updateScale); 
+            updateScale();
+        }
+
+        // ================= 智能文本处理引擎 =================
+        function processLabel(rawLabel) {
+            if (!rawLabel || rawLabel === '-') return { text: '-' };
+            let text = String(rawLabel).trim();
+            
+            text = text.replace(/女性胸部过于暴露/g, '胸部过于暴露');
+            text = text.replace(/自残自杀与危险行为/g, '自残自杀/危险行为');
+            text = text.replace(/女性下装暴露/g, '下装暴露');
+            text = text.replace(/尸体或极度不安场景/g, '极度不安场景');
+            text = text.replace(/暴露生殖敏感部位/g, '生殖敏感部位');
+            text = text.replace(/未成年人危险行为/g, '未成年危险行为');
+            
+            // 智能识别并去除“轻毒品”后面的括号内容
+            text = text.replace(/轻毒品[（(].*?[)）]/g, '轻毒品');
+            
+            return { text: text };
+        }
+
+        // ================= 多区块智能切割与解析 =================
+        function parseExcelMatrixBlock(matrix) {
+            const extractHeaderStats = (str) => {
+                if(!str) return { start: '-', startTrend: '', uid: '-', uidTrend: '' };
+                
+                let start = '-', startTrend = '', uid = '-', uidTrend = '';
+                
+                const startMatch = str.match(/开播数?[：:]\s*([\d,.]+)/);
+                if (startMatch) start = startMatch[1];
+                
+                const uidMatch = str.match(/违规(UID)?数?[：:]\s*([\d,.]+)/);
+                if (uidMatch) uid = uidMatch[2];
+                
+                let splitIdx = str.indexOf('违规');
+                if (splitIdx === -1) splitIdx = str.length;
+                
+                let s1 = str.substring(0, splitIdx);
+                let s2 = str.substring(splitIdx);
+                
+                const getTrend = (s) => { const m = s.match(/环比[：:]\s*([-\d.]+%?)/); return m ? m[1] : ''; }
+                
+                startTrend = getTrend(s1);
+                uidTrend = getTrend(s2);
+                
+                return { start, startTrend, uid, uidTrend };
+            }
+
+            const getTop3Block = (startRowIndex) => {
+                let items = [];
+                for(let i = 0; i < 3; i++) {
+                    let row = matrix[startRowIndex + i] || [];
+                    let leftLabel = row[1], leftVal = row[2];
+                    let arrowIdx = row.findIndex(c => String(c).trim() === '->' || String(c).trim() === '→');
+                    
+                    let rightLabel = '-', rightVal = '-', rightPct = '-';
+                    if (arrowIdx !== -1) {
+                        rightLabel = row[arrowIdx + 1]; rightVal = row[arrowIdx + 2]; rightPct = row[arrowIdx + 3];
+                    } else {
+                        rightLabel = row[4] || row[5] || '-'; rightVal = row[5] || row[6] || '-'; rightPct = row[6] || row[7] || '-';
+                    }
+                    items.push({
+                        leftLabel: leftLabel || '-', leftVal: leftVal || '-',
+                        rightLabel: rightLabel || '-', rightVal: rightVal || '-', rightPct: rightPct || '-'
+                    });
+                }
+                return items;
+            }
+
+            const findRowIndex = (keyword) => matrix.findIndex(r => r.some(cell => cell && String(cell).includes(keyword)));
+
+            try {
+                let regionName = matrix[0][0]; 
+                if (!regionName || String(regionName).trim() === '') regionName = "未命名大区";
+                
+                const totalStatsRow = findRowIndex('日均开播数');
+                if (totalStatsRow === -1) return null; 
+                const totalStats = extractHeaderStats(matrix[totalStatsRow].join(' ')); 
+
+                const pgcStatsRow = findRowIndex('PGC日均开播数');
+                const pgcStats = extractHeaderStats(pgcStatsRow !== -1 ? matrix[pgcStatsRow].join(' ') : '');
+                const pgcBaseRow = findRowIndex('底线违规') + 2; 
+                const pgcEcoRow = findRowIndex('生态违规') + 1; 
+                
+                const highStatsRow = findRowIndex('高价值日均开播数');
+                const highStats = extractHeaderStats(highStatsRow !== -1 ? matrix[highStatsRow].join(' ') : '');
+                
+                const highArea = matrix.slice(Math.max(0, highStatsRow)); 
+                const highBaseRel = highArea.findIndex(r => r.some(c => c === '底线违规'));
+                const highEcoRel = highArea.findIndex(r => r.some(c => c === '生态违规'));
+                
+                const highBaseRow = highBaseRel !== -1 ? highStatsRow + highBaseRel + 2 : -1;
+                const highEcoRow = highEcoRel !== -1 ? highStatsRow + highEcoRel + 1 : -1;
+
+                const periodRow = matrix[findRowIndex('上双月')] || [];
+                let leftPeriod = periodRow[1] || periodRow[0] || '上期'; 
+                let rightPeriod = '近期';
+                for(let c of periodRow) { if(String(c).includes('近双月')) { rightPeriod = c; break; } }
+
+                return {
+                    regionName, leftPeriod, rightPeriod,
+                    total: totalStats, pgc: pgcStats, high: highStats,
+                    pgcBase: pgcBaseRow > 1 ? getTop3Block(pgcBaseRow) : [],
+                    pgcEco: pgcEcoRow > 0 ? getTop3Block(pgcEcoRow) : [],
+                    highBase: highBaseRow > 1 ? getTop3Block(highBaseRow) : [],
+                    highEco: highEcoRow > 0 ? getTop3Block(highEcoRow) : []
+                };
+            } catch (err) {
+                console.error("块解析失败", err); return null;
+            }
+        }
+
+        function switchRegion() {
+            const select = document.getElementById('regionSelect');
+            currentRegionIndex = parseInt(select.value);
+            renderDashboard(parsedRegions[currentRegionIndex]);
+        }
+
+        function formatTrend(trendStr, isHeader = false) {
+            if (!trendStr || trendStr === '-' || String(trendStr).trim() === '') return isHeader ? '' : `<div class="pct t-neu-text">-</div>`;
+            
+            let val = String(trendStr).trim();
+            if (/^[\d.-]+$/.test(val) && val.includes('.') && parseFloat(val) < 2 && parseFloat(val) > -2) {
+                val = (parseFloat(val) * 100).toFixed(2) + '%';
+            }
+
+            if (val === '新增') return `<div class="pct t-up num-font">新增</div>`;
+            
+            let isNegative = val.includes('-');
+            let numStr = val.replace('-', '').trim();
+            let numVal = parseFloat(numStr);
+            
+            // 新增逻辑：绝对的 0 显示为中性灰色态。只有带百分比的才渲染为 - 0.00%
+            if (numVal === 0) {
+                if (val.includes('%')) {
+                    if (isHeader) {
+                        return `<span class="t-trend neu num-font">- 0.00%</span>`;
+                    } else {
+                        return `<div class="pct t-neu-text num-font">- 0.00%</div>`;
+                    }
+                } else {
+                    if (isHeader) {
+                        return `<span class="t-trend neu num-font">-</span>`;
+                    } else {
+                        return `<div class="pct t-neu-text num-font">-</div>`;
+                    }
+                }
+            }
+            
+            if (isHeader) {
+                let symbol = isNegative ? '↓' : '↑';
+                return `<span class="t-trend neu num-font">${symbol} ${numStr}</span>`;
+            } else {
+                if (isNegative) return `<div class="pct t-down num-font">↓ ${numStr}</div>`;
+                else return `<div class="pct t-up num-font">↑ ${numStr}</div>`;
+            }
+        }
+
+        function renderDashboard(d) {
+            if (!d) return;
+            const buildCategory = (title, cssClass, svgPath, dataBlock) => {
+                let leftHtml = '', rightHtml = '';
+                dataBlock.forEach((item, idx) => {
+                    let rNum = idx + 1;
+                    let leftL = processLabel(item.leftLabel);
+                    let rightL = processLabel(item.rightLabel);
+                    
+                    leftHtml += `<div class="row"><div class="idx num-font">${rNum}</div><div class="lbl">${leftL.text}</div><div class="val num-font">${item.leftVal}</div></div>`;
+                    rightHtml += `<div class="row"><div class="idx num-font">${rNum}</div><div class="lbl">${rightL.text}</div><div class="val num-font">${item.rightVal}</div>${formatTrend(item.rightPct, false)}</div>`;
+                });
+
+                return `
+                <div class="category">
+                    <div class="cat-title ${cssClass}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">${svgPath}</svg>${title}</div>
+                    <div class="compare-area">
+                        <div class="col"><div class="col-title">${d.leftPeriod}</div>${leftHtml}</div>
+                        <div class="arrow-sep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14m-7-7 7 7-7 7"/></svg></div>
+                        <div class="col"><div class="col-title">${d.rightPeriod}</div>${rightHtml}</div>
+                    </div>
+                </div>`;
+            };
+
+            const html = `
+                <div class="header-compact">
+                    <div class="region">${d.regionName}</div>
+                    <div class="metrics-group">
+                        <div class="metric-item"><span class="metric-title">日均开播数</span>
+                            <div class="metric-row"><span class="metric-val num-font">${d.total.start}</span>${formatTrend(d.total.startTrend, true)}</div>
+                        </div>
+                        <div class="metric-item"><span class="metric-title">违规UID数</span>
+                            <div class="metric-row"><span class="metric-val num-font">${d.total.uid}</span>${formatTrend(d.total.uidTrend, true)}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-head">
+                        <div class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path></svg>PGC</div>
+                        <div class="metrics-group">
+                            <div class="metric-item"><span class="metric-title">日均开播</span><div class="metric-row"><span class="metric-val num-font">${d.pgc.start}</span>${formatTrend(d.pgc.startTrend, true)}</div></div>
+                            <div class="metric-item"><span class="metric-title">日均违规</span><div class="metric-row"><span class="metric-val num-font">${d.pgc.uid}</span>${formatTrend(d.pgc.uidTrend, true)}</div></div>
+                        </div>
+                    </div>
+                    ${buildCategory('底线', 'baseline', '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>', d.pgcBase)}
+                    ${buildCategory('生态', 'eco', '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"></path>', d.pgcEco)}
+                </div> 
+
+                <div class="section">
+                    <div class="section-head">
+                        <div class="badge high-value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 3h12l4 6-10 13L2 9Z"></path><path d="M11 3 8 9l4 13"></path><path d="M12 3v19"></path><path d="M13 3l3 6-4 13"></path></svg>高价值</div>
+                        <div class="metrics-group">
+                            <div class="metric-item"><span class="metric-title">日均开播</span><div class="metric-row"><span class="metric-val num-font">${d.high.start}</span>${formatTrend(d.high.startTrend, true)}</div></div>
+                            <div class="metric-item"><span class="metric-title">日均违规</span><div class="metric-row"><span class="metric-val num-font">${d.high.uid}</span>${formatTrend(d.high.uidTrend, true)}</div></div>
+                        </div>
+                    </div>
+                    ${buildCategory('底线', 'baseline', '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>', d.highBase)}
+                    ${buildCategory('生态', 'eco', '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"></path>', d.highEco)}
+                </div> 
+                <div class="footer-note">* 以上数值均为日均uid数</div>
+            `;
+            document.getElementById('exportTarget').innerHTML = html;
+        }
+
+        // 核心出图逻辑抽离
+        async function captureAndSave(regionName) {
+            const target = document.getElementById('exportTarget');
+            const clone = target.cloneNode(true);
+            clone.style.position = 'absolute'; clone.style.left = '-9999px'; clone.style.top = '-9999px';
+            
+            const w = document.getElementById('canvasW').value;
+            const h = document.getElementById('canvasH').value;
+            clone.style.width = w + 'px'; 
+            clone.style.minHeight = h + 'px'; 
+            clone.style.height = 'auto'; 
+            clone.style.backgroundColor = '#ffffff';
+            document.body.appendChild(clone);
+
+            try {
+                const canvas = await html2canvas(clone, { scale: 3, backgroundColor: '#ffffff', useCORS: true, logging: false });
+                document.body.removeChild(clone);
+                const link = document.createElement('a');
+                link.download = `${regionName}_监控看板.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            } catch (err) {
+                if(document.body.contains(clone)) document.body.removeChild(clone);
+                console.error("生成出错", err);
+            }
+        }
+
+        // 导出单张图
+        async function downloadHDImage() {
+            const btn = document.getElementById('downloadBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '正在生成...'; btn.disabled = true;
+            
+            await captureAndSave(parsedRegions[currentRegionIndex].regionName);
+            
+            btn.innerHTML = originalText; btn.disabled = false;
+        }
+
+        // 批量导出所有图
+        async function downloadAllHDImages() {
+            const btn = document.getElementById('batchBtn');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+
+            for (let i = 0; i < parsedRegions.length; i++) {
+                // 切换UI预览
+                document.getElementById('regionSelect').value = i;
+                switchRegion();
+                
+                btn.innerHTML = `正在生成 (${i + 1}/${parsedRegions.length})...`;
+                // 停顿 200ms 让浏览器有足够时间重排 DOM
+                await new Promise(resolve => setTimeout(resolve, 200)); 
+                
+                await captureAndSave(parsedRegions[i].regionName);
+                
+                // 停顿 300ms 避免浏览器短时间内并发下载被拦截
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+
+        // 页面 DOM 完全加载后再绑定事件，确保安全
+        document.addEventListener('DOMContentLoaded', () => {
+            initCanvasControl();
+
+            const excelFileBtn = document.getElementById('excelFile');
+            if (excelFileBtn) {
+                excelFileBtn.addEventListener('change', function(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const data = new Uint8Array(event.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        const matrix = XLSX.utils.sheet_to_json(firstSheet, {header: 1, defval: '', raw: false});
+                        
+                        // 批量搜寻大区切割点
+                        let startRows = [];
+                        for(let i=0; i<matrix.length; i++) {
+                            let rowStr = matrix[i].join('');
+                            if(rowStr.includes('日均开播数') && rowStr.includes('违规UID数')) {
+                                startRows.push(i);
+                            }
+                        }
+                        
+                        if (startRows.length === 0) {
+                            alert("未找到有效数据结构，请确保包含'日均开播数'和'违规UID数'标识");
+                            return;
+                        }
+
+                        parsedRegions = [];
+                        for (let i = 0; i < startRows.length; i++) {
+                            let statsRow = startRows[i];
+                            let regionNameRow = Math.max(0, statsRow - 1); 
+                            let nextRegionRow = (i + 1 < startRows.length) ? Math.max(0, startRows[i+1] - 1) : matrix.length;
+                            
+                            let subMatrix = matrix.slice(regionNameRow, nextRegionRow);
+                            let parsed = parseExcelMatrixBlock(subMatrix);
+                            if (parsed) parsedRegions.push(parsed);
+                        }
+                        
+                        if(parsedRegions.length > 0) {
+                            const select = document.getElementById('regionSelect');
+                            select.innerHTML = '';
+                            parsedRegions.forEach((r, idx) => {
+                                select.innerHTML += `<option value="${idx}">${r.regionName}</option>`;
+                            });
+                            
+                            select.disabled = false;
+                            document.getElementById('downloadBtn').disabled = false;
+                            document.getElementById('batchBtn').disabled = false;
+                            
+                            currentRegionIndex = 0;
+                            renderDashboard(parsedRegions[0]);
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                });
+            }
+        });
+    </script>
+</body>
+</html>
