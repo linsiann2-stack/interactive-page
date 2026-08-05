@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高定版违规数据监控面板工具 - 批量版</title>
+    <title>PGC&高价值违规标签小图 - 批量版</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -102,8 +102,10 @@
         .cat-title.baseline { color: #e74c3c; }
         .cat-title.eco { color: #27ae60; }
 
-        /* 表格区域：优化网格比例，右侧包含百分比给多一点空间 (1fr vs 1.55fr) 确保不溢出 */
-        .compare-area { display: grid; grid-template-columns: 1fr calc(30 * var(--f)) 1.55fr; background: var(--inner-bg); border-radius: calc(18 * var(--u)); padding: calc(12 * var(--u)) calc(18 * var(--u)); border: calc(3 * var(--u)) solid #eef5fb; gap: calc(8 * var(--u)); align-items: stretch; flex: 1; }
+        /* 表格区域：调整网格比例，解决左右两侧不平衡问题 */
+        /* 左侧列增加宽度，因为右侧包含了额外的百分比列，为了视觉平衡，左侧的基础数据区应该占用相对相近的空间，或者通过 flex 使标签和数值分布更均匀 */
+        /* 之前是 1fr : 30px : 1.55fr，现在调整为更均衡的比例，或者保持两列内部结构一致，仅留出百分比的空间 */
+        .compare-area { display: grid; grid-template-columns: 1.15fr calc(30 * var(--f)) 1.4fr; background: var(--inner-bg); border-radius: calc(18 * var(--u)); padding: calc(12 * var(--u)) calc(18 * var(--u)); border: calc(3 * var(--u)) solid #eef5fb; gap: calc(8 * var(--u)); align-items: stretch; flex: 1; }
         .col { display: flex; flex-direction: column; gap: calc(4 * var(--u)); min-width: 0; }
         .col-title { text-align: center; font-size: calc(20 * var(--f)); color: #1a2b3c; background: #e9f2fa; border-radius: calc(40 * var(--f)); padding: calc(6 * var(--f)) 0; margin-bottom: calc(4 * var(--u)); font-weight: 800; }
         .arrow-sep { display: flex; align-items: center; justify-content: center; color: #9ab9d4; }
@@ -122,12 +124,18 @@
             white-space: nowrap; 
         }
         
+        /* 为了左侧间距看起来不那么紧凑，让数值稍微靠右一些，或者通过 flex 分配 */
         .val { font-weight: 900; font-size: calc(36 * var(--f)); color: var(--primary); flex-shrink: 0; text-align: right; min-width: calc(44 * var(--f)); }
+        
+        /* 新增：专门为左侧列的值添加一个包装，以便控制右侧间距，使其看起来更平衡 */
+        .col:first-child .row {
+            padding-right: calc(24 * var(--u)); /* 增加左侧列内容与中心箭头的间距 */
+        }
+
         .footer-note { font-size: calc(18 * var(--f)); color: #8da9c2; font-weight: 800; margin-top: auto; padding-left: calc(8 * var(--u)); padding-bottom: calc(4 * var(--u)); flex-shrink: 0; }
     </style>
 </head>
 <body>
-
     <div class="sidebar">
         <h2>违规数据监控 (批量版)</h2>
         
@@ -150,7 +158,7 @@
                 <span style="color: #8da9c2;">宽 × 高</span>
                 <input type="number" id="canvasH" value="1650" step="10">
             </div>
-            <div class="instructions" style="margin-top:0;">💡 提示：系统启用了<b>双轨缩放</b>。遇到细高尺寸时，不仅行距会舒展，<b>字体大小也会在安全范围内智能放大</b>，拒绝局促！</div>
+            <!-- 提示已按照要求移除 -->
         </div>
 
         <button class="btn-primary" id="downloadBtn" onclick="downloadHDImage()" disabled>
@@ -344,7 +352,6 @@
             let numStr = val.replace('-', '').trim();
             let numVal = parseFloat(numStr);
             
-            // 新增逻辑：绝对的 0 显示为中性灰色态。只有带百分比的才渲染为 - 0.00%
             if (numVal === 0) {
                 if (val.includes('%')) {
                     if (isHeader) {
