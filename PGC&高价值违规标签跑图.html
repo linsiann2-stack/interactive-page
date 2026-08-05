@@ -52,23 +52,23 @@
             --u: 1px; /* 结构比例单位 (Structure Scale) */
             --f: 1px; /* 字体比例单位 (Font Scale) - 智能动态计算 */
             flex: 1; 
-            width: 100%; min-height: 100%; background: var(--bg); 
+            width: 100%; min-height: 100%; background: #ffffff; /* 修复: 直接写死HEX色值，防止 html2canvas 变色 */
             padding: calc(24 * var(--u)) calc(28 * var(--u)); 
             display: flex; flex-direction: column; gap: calc(20 * var(--u)); 
-            color: var(--text-main);
+            color: #0a1118;
         }
 
         /* 统一数字字体规范 */
         .num-font { font-family: 'Arial', 'Helvetica', sans-serif; letter-spacing: -0.5px; }
 
         /* 顶部大盘 */
-        .header-compact { display: flex; align-items: center; justify-content: space-between; background: var(--card-bg); padding: calc(16 * var(--u)) calc(24 * var(--u)); border-radius: calc(20 * var(--u)); border: calc(3 * var(--u)) solid var(--border); min-height: calc(100 * var(--u)); flex-shrink: 0; gap: calc(20 * var(--u)); }
-        .region { font-size: calc(44 * var(--f)); font-weight: 900; color: var(--text-main); flex: 1; line-height: 1.1; white-space: normal; }
+        .header-compact { display: flex; align-items: center; justify-content: space-between; background: #ffffff; padding: calc(16 * var(--u)) calc(24 * var(--u)); border-radius: calc(20 * var(--u)); border: calc(3 * var(--u)) solid #dbe7f0; min-height: calc(100 * var(--u)); flex-shrink: 0; gap: calc(20 * var(--u)); }
+        .region { font-size: calc(44 * var(--f)); font-weight: 900; color: #0a1118; flex: 1; line-height: 1.1; white-space: normal; }
         .metrics-group { display: flex; gap: calc(24 * var(--u)); flex-shrink: 0; }
         .metric-item { display: flex; flex-direction: column; align-items: flex-end; gap: calc(4 * var(--u)); }
-        .metric-title { font-size: calc(18 * var(--f)); color: var(--text-sec); font-weight: 800; }
+        .metric-title { font-size: calc(18 * var(--f)); color: #2c3e50; font-weight: 800; }
         .metric-row { display: flex; align-items: center; gap: calc(8 * var(--u)); }
-        .metric-val { font-size: calc(44 * var(--f)); font-weight: 900; color: var(--primary); }
+        .metric-val { font-size: calc(44 * var(--f)); font-weight: 900; color: #2e95db; /* 修复: 强制写死主色调蓝色 */ }
         
         /* 趋势标签样式 */
         .t-trend { padding: calc(6 * var(--f)) calc(12 * var(--f)); border-radius: calc(12 * var(--f)); font-size: calc(22 * var(--f)); font-weight: 900; white-space: nowrap; }
@@ -84,14 +84,14 @@
             white-space: nowrap; 
         }
         
-        .t-down { color: var(--down); }
-        .t-up { color: var(--up); }
-        .t-neu-text { color: var(--neu); }
+        .t-down { color: #27ae60; }
+        .t-up { color: #e74c3c; }
+        .t-neu-text { color: #7f8c8d; }
 
         /* 主体模块 */
-        .section { background: var(--card-bg); border-radius: calc(24 * var(--u)); padding: calc(18 * var(--u)) calc(24 * var(--u)); border: calc(3 * var(--u)) solid var(--border); display: flex; flex-direction: column; gap: calc(16 * var(--u)); overflow: hidden; flex: 1; }
-        .section-head { display: flex; align-items: center; justify-content: space-between; border-bottom: calc(3 * var(--u)) dashed var(--border); padding-bottom: calc(10 * var(--u)); margin-bottom: calc(4 * var(--u)); flex-shrink: 0; }
-        .badge { background: var(--primary); color: white; padding: calc(8 * var(--f)) calc(16 * var(--f)); border-radius: calc(16 * var(--f)); font-size: calc(32 * var(--f)); font-weight: 900; display: inline-flex; align-items: center; gap: calc(12 * var(--f)); }
+        .section { background: #ffffff; border-radius: calc(24 * var(--u)); padding: calc(18 * var(--u)) calc(24 * var(--u)); border: calc(3 * var(--u)) solid #dbe7f0; display: flex; flex-direction: column; gap: calc(16 * var(--u)); overflow: hidden; flex: 1; }
+        .section-head { display: flex; align-items: center; justify-content: space-between; border-bottom: calc(3 * var(--u)) dashed #dbe7f0; padding-bottom: calc(10 * var(--u)); margin-bottom: calc(4 * var(--u)); flex-shrink: 0; }
+        .badge { background: #2e95db; color: white; padding: calc(8 * var(--f)) calc(16 * var(--f)); border-radius: calc(16 * var(--f)); font-size: calc(32 * var(--f)); font-weight: 900; display: inline-flex; align-items: center; gap: calc(12 * var(--f)); }
         .badge svg { width: calc(36 * var(--f)); height: calc(36 * var(--f)); } 
         .badge.high-value { background: #1b689e; }
         
@@ -105,7 +105,7 @@
         /* 表格区域：调整网格比例，解决左右两侧不平衡问题 */
         /* 左侧列增加宽度，因为右侧包含了额外的百分比列，为了视觉平衡，左侧的基础数据区应该占用相对相近的空间，或者通过 flex 使标签和数值分布更均匀 */
         /* 之前是 1fr : 30px : 1.55fr，现在调整为更均衡的比例，或者保持两列内部结构一致，仅留出百分比的空间 */
-        .compare-area { display: grid; grid-template-columns: 1.15fr calc(30 * var(--f)) 1.4fr; background: var(--inner-bg); border-radius: calc(18 * var(--u)); padding: calc(12 * var(--u)) calc(18 * var(--u)); border: calc(3 * var(--u)) solid #eef5fb; gap: calc(8 * var(--u)); align-items: stretch; flex: 1; }
+        .compare-area { display: grid; grid-template-columns: 1.15fr calc(30 * var(--f)) 1.4fr; background: #f8fbff; border-radius: calc(18 * var(--u)); padding: calc(12 * var(--u)) calc(18 * var(--u)); border: calc(3 * var(--u)) solid #eef5fb; gap: calc(8 * var(--u)); align-items: stretch; flex: 1; }
         .col { display: flex; flex-direction: column; gap: calc(4 * var(--u)); min-width: 0; }
         .col-title { text-align: center; font-size: calc(20 * var(--f)); color: #1a2b3c; background: #e9f2fa; border-radius: calc(40 * var(--f)); padding: calc(6 * var(--f)) 0; margin-bottom: calc(4 * var(--u)); font-weight: 800; }
         .arrow-sep { display: flex; align-items: center; justify-content: center; color: #9ab9d4; }
@@ -125,7 +125,7 @@
         }
         
         /* 为了左侧间距看起来不那么紧凑，让数值稍微靠右一些，或者通过 flex 分配 */
-        .val { font-weight: 900; font-size: calc(36 * var(--f)); color: var(--primary); flex-shrink: 0; text-align: right; min-width: calc(44 * var(--f)); }
+        .val { font-weight: 900; font-size: calc(36 * var(--f)); color: #2e95db; /* 修复: 强制写死主色调蓝色 */ flex-shrink: 0; text-align: right; min-width: calc(44 * var(--f)); }
         
         /* 新增：专门为左侧列的值添加一个包装，以便控制右侧间距，使其看起来更平衡 */
         .col:first-child .row {
