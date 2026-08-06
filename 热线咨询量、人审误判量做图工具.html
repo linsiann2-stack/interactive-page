@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>热线数据双折线图生成器 (咨询量 & 人审误判)</title>
+    <title>热线数据折线图生成器 (Excel版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
@@ -18,16 +18,20 @@
 
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center text-center">
-            <h1 class="text-2xl font-bold mb-2" style="color: #2e95db;">热线咨询量与人审误判量趋势</h1>
-            <p class="text-gray-500 text-sm">自动解析上传的数据，生成咨询量与人审误判量的对比图表。</p>
+            <h1 class="text-2xl font-bold mb-2" style="color: #2e95db;">热线咨询量与误判量可视化工具 (Excel版)</h1>
+            <p class="text-gray-500 text-sm">请上传您的 Excel (.xlsx/.xls) 文件。工具将自动读取第一个工作表的数据并生成图表。</p>
         </div>
 
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center gap-6">
-            <div class="w-full max-w-xl space-y-2">
-                <label class="block text-sm font-medium text-gray-700">上传 数据表 (表格需包含“热线人审误判数”和“热线咨询量”上下两个区块，首列为月份)</label>
-                <input type="file" id="dataFile" accept=".xlsx, .xls, .csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#2e95db] file:text-white hover:file:bg-[#1a7bbd] cursor-pointer border border-gray-200 rounded-md">
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-2">
+                <label class="block text-sm font-medium text-gray-700">1. 上传 咨询与申诉量.xlsx</label>
+                <input type="file" id="consultFile" accept=".xlsx, .xls, .csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#2e95db] file:text-white hover:file:bg-[#1a7bbd] cursor-pointer border border-gray-200 rounded-md">
             </div>
-            <div class="flex flex-col items-center w-full">
+            <div class="space-y-2">
+                <label class="block text-sm font-medium text-gray-700">2. 上传 误判量.xlsx</label>
+                <input type="file" id="misjudgeFile" accept=".xlsx, .xls, .csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#2e95db] file:text-white hover:file:bg-[#1a7bbd] cursor-pointer border border-gray-200 rounded-md">
+            </div>
+            <div class="col-span-1 md:col-span-2 flex flex-col items-center mt-4">
                 <div class="flex flex-col md:flex-row space-y-3 md:space-y-0 md:space-x-4 w-full md:w-auto">
                     <button id="generateBtn" class="px-8 py-3 bg-[#2e95db] text-white font-bold rounded-lg shadow-md hover:bg-[#1a7bbd] transition duration-200 w-full md:w-auto">
                         一键生成图表
@@ -40,43 +44,64 @@
             </div>
         </div>
 
-        <div id="regionNav" class="flex flex-wrap gap-2 justify-center mt-4"></div>
+        <div id="countryNav" class="flex flex-wrap gap-2 justify-center mt-4"></div>
+
         <div id="chartsContainer" class="flex flex-wrap gap-8 justify-center mt-4"></div>
     </div>
 
     <script>
         const THEME_BLUE = '#2e95db';
-        const HUMAN_COLOR = '#ef4444';   // 红色表示人审
+        const MACHINE_COLOR = '#f97316'; // 橙色，用于机审误判
+        const HUMAN_COLOR = '#eab308';   // 黄色，用于人审误判
         let generatedCharts = [];
 
-        // 增强版：支持大小写不敏感匹配中英文表头
+        // 辅助函数：模糊匹配列名，支持多列名匹配
         function getColumnValue(row, keywords) {
             if (!Array.isArray(keywords)) keywords = [keywords];
-            for (let kw of keywords) {
-                const key = Object.keys(row).find(k => k.trim().toLowerCase().includes(kw.toLowerCase()));
+            
+            const keys = Object.keys(row);
+            for (let keyword of keywords) {
+                const key = keys.find(k => k.trim().includes(keyword));
                 if (key) return row[key];
             }
             return undefined;
         }
 
-        // 月度转译器：强制提取 YYYY-MM，已适配 25-04 缩写格式
-        function normalizeMonthDate(val) {
-            if (val === undefined || val === null || val === "") return "";
-            if (typeof val === 'number' || (!isNaN(val) && Number(val) > 20000)) {
-                const utcDate = new Date(Math.round((Number(val) - 25569) * 86400 * 1000));
-                const y = utcDate.getUTCFullYear();
-                const m = utcDate.getUTCMonth() + 1;
-                return `${y}-${m < 10 ? '0' + m : m}`;
+        // ✨ 新增核心：智能日期格式化函数，兼容 Excel 序列号和多种字符串
+        function formatExcelDate(rawValue) {
+            if (rawValue === undefined || rawValue === null || rawValue === "") return "";
+            
+            // 1. 处理 Excel 导出的纯数字日期（序列号，例如 46055 代表 2026/2/2）
+            if (typeof rawValue === 'number' || (typeof rawValue === 'string' && !isNaN(Number(rawValue)) && Number(rawValue) > 10000)) {
+                const serial = Number(rawValue);
+                // Excel 序列号转 JS 日期 (基于 1900-01-01，使用 UTC 防时区偏移)
+                const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
+                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                const day = String(date.getUTCDate()).padStart(2, '0');
+                return `${month}/${day}`;
             }
-            let str = String(val).trim().replace(/\//g, '-').replace(/年/g, '-').replace(/月/g, '');
-            let match = str.match(/^(\d{2,4})-(\d{1,2})/);
-            if (match) {
-                let y = match[1];
-                if (y.length === 2) y = '20' + y;
-                let m = parseInt(match[2]);
-                return `${y}-${m < 10 ? '0' + m : m}`;
+            
+            // 2. 处理字符串格式 (如 "2026/2/2", "2026-02-02", "2026-02-02~2026-02-08")
+            let dateStr = String(rawValue).trim();
+            if (dateStr.includes('~')) dateStr = dateStr.split('~')[0].trim();
+            if (dateStr.includes(' ')) dateStr = dateStr.split(' ')[0];
+            
+            dateStr = dateStr.replace(/\//g, '-');
+            const parts = dateStr.split('-');
+            
+            if (parts.length >= 3) {
+                // 格式 YYYY-MM-DD 提取 MM/DD
+                const month = parts[1].padStart(2, '0');
+                const day = parts[2].padStart(2, '0');
+                return `${month}/${day}`;
+            } else if (parts.length === 2) {
+                // 格式 MM-DD 补齐前导 0
+                const month = parts[0].padStart(2, '0');
+                const day = parts[1].padStart(2, '0');
+                return `${month}/${day}`;
             }
-            return str;
+            
+            return dateStr;
         }
 
         function parseExcel(file) {
@@ -86,10 +111,11 @@
                     try {
                         const data = new Uint8Array(e.target.result);
                         const workbook = XLSX.read(data, { type: 'array' });
+                        // 读取第一个工作表
                         const firstSheetName = workbook.SheetNames[0];
                         const worksheet = workbook.Sheets[firstSheetName];
-                        // 改为输出二维数组以适配上下两块的排版
-                        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+                        // 转换为 JSON 对象数组
+                        const json = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
                         resolve(json);
                     } catch (err) {
                         reject("Excel解析失败: " + err.message);
@@ -101,10 +127,8 @@
         }
 
         function formatLabel(value) {
-            if (value === null || value === undefined) return '';
-            if (value === 0) return '0';
             const num = parseFloat(value);
-            if (isNaN(num)) return value;
+            if (isNaN(num) || num === 0) return num; // 如果是 0 也直接返回 0
             if (num >= 1000) {
                 let formatted = (num / 1000).toFixed(1);
                 if (formatted.endsWith('.0')) formatted = formatted.slice(0, -2);
@@ -120,230 +144,186 @@
             statusEl.classList.remove('hidden');
         }
 
-        function getSafeLogData(val) {
-            if (val === null) return null;
-            return {
-                value: val < 1 ? 1 : val, 
-                realValue: val
-            };
-        }
-
         document.getElementById('generateBtn').addEventListener('click', async () => {
-            const dataFile = document.getElementById('dataFile').files[0];
+            const consultFile = document.getElementById('consultFile').files[0];
+            const misjudgeFile = document.getElementById('misjudgeFile').files[0];
             const batchDownloadBtn = document.getElementById('batchDownloadBtn');
 
-            if (!dataFile) {
-                showMessage('请先上传包含数据的 Excel 文件！');
+            if (!consultFile || !misjudgeFile) {
+                showMessage('请先上传 咨询与申诉量 和 误判量 两个 Excel 文件！');
                 return;
             }
 
             showMessage('正在解析 Excel 数据并生成图表...', false);
             const container = document.getElementById('chartsContainer');
             container.innerHTML = '';
-            const navContainer = document.getElementById('regionNav');
+            const navContainer = document.getElementById('countryNav');
             navContainer.innerHTML = '';
             
             generatedCharts = [];
             batchDownloadBtn.classList.add('hidden');
 
             try {
-                const sheetData = await parseExcel(dataFile);
+                const consultData = await parseExcel(consultFile);
+                const misjudgeData = await parseExcel(misjudgeFile);
 
-                const regionMap = {};
-                const allMonthsSet = new Set();
+                const countryMap = {};
+                const allWeeksSet = new Set();
 
-                let currentMode = null; // 'misjudge' 或 'consult'
-                let regionHeaders = []; // 保存当前区块的大区列表
-
-                // 解析包含多个区块（上下排布）的二维表数据
-                sheetData.forEach(row => {
-                    if (!row || row.length === 0) return;
+                // 处理咨询与申诉量数据
+                consultData.forEach(row => {
+                    const rawWeek = getColumnValue(row, ['week_range', '周']);
+                    const week = formatExcelDate(rawWeek); // ✨ 使用新的格式化函数
                     
-                    const firstCell = String(row[0] || '').trim();
+                    const country = String(getColumnValue(row, ['guanbao_area_name', '国家']) || "").trim();
+                    const value = parseInt(getColumnValue(row, ['_col0', '咨询与申诉量', '咨询量'])) || 0;
                     
-                    // 检测区块标题
-                    if (firstCell.includes('人审误判')) {
-                        currentMode = 'misjudge';
-                        return;
-                    }
-                    if (firstCell.includes('咨询量')) {
-                        currentMode = 'consult';
-                        return;
-                    }
+                    if (!week || !country) return;
 
-                    // 检测表头行 (首列为月份)
-                    if (firstCell === '月份' || firstCell === 'month' || firstCell === '时间') {
-                        // 提取该行后面的所有列作为大区名
-                        regionHeaders = row.slice(1).map(r => String(r || '').trim()).filter(r => r !== '');
-                        return;
-                    }
-
-                    // 解析数据行 (在确定的区块模式下，且有大区表头，首列不为空)
-                    if (currentMode && regionHeaders.length > 0 && firstCell !== '') {
-                        const monthKey = normalizeMonthDate(firstCell);
-                        if (!monthKey) return; 
-
-                        regionHeaders.forEach((region, index) => {
-                            // row[1] 对应 regionHeaders[0]
-                            const val = parseFloat(row[index + 1]) || 0;
-                            
-                            if (!regionMap[region]) regionMap[region] = {};
-                            if (!regionMap[region][monthKey]) regionMap[region][monthKey] = { consult: 0, misjudgeHuman: 0 };
-                            
-                            if (currentMode === 'misjudge') {
-                                regionMap[region][monthKey].misjudgeHuman += val;
-                            } else if (currentMode === 'consult') {
-                                regionMap[region][monthKey].consult += val;
-                            }
-                        });
-                        allMonthsSet.add(monthKey);
-                    }
+                    if (!countryMap[country]) countryMap[country] = {};
+                    if (!countryMap[country][week]) countryMap[country][week] = { consult: 0, machineMisjudge: 0, humanMisjudge: 0 };
+                    
+                    countryMap[country][week].consult += value;
+                    allWeeksSet.add(week);
                 });
 
-                const sortedMonths = Array.from(allMonthsSet).sort();
-                const parsedRegions = Object.keys(regionMap).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+                // 处理误判量数据
+                misjudgeData.forEach(row => {
+                    const rawWeek = getColumnValue(row, ['week_start', '周']);
+                    const week = formatExcelDate(rawWeek); // ✨ 使用新的格式化函数
+                    
+                    const country = String(getColumnValue(row, ['guanbao_area_name', '国家']) || "").trim();
+                    const value = parseInt(getColumnValue(row, ['cnt', '误判量'])) || 0;
+                    const auditType = String(getColumnValue(row, ['audit_type', '类型']) || "").trim();
+
+                    if (!week || !country) return;
+
+                    if (!countryMap[country]) countryMap[country] = {};
+                    if (!countryMap[country][week]) countryMap[country][week] = { consult: 0, machineMisjudge: 0, humanMisjudge: 0 };
+                    
+                    if (auditType.includes('机审')) {
+                        countryMap[country][week].machineMisjudge += value;
+                    } else if (auditType.includes('人审')) {
+                        countryMap[country][week].humanMisjudge += value;
+                    } else {
+                        countryMap[country][week].machineMisjudge += value;
+                    }
+
+                    allWeeksSet.add(week);
+                });
+
+                // 因为已经全部格式化为了 MM/DD，直接排序即可
+                const sortedWeeks = Array.from(allWeeksSet).sort();
                 
-                if (parsedRegions.length === 0) {
-                    showMessage('未在文件中找到有效数据，请检查表格是否包含“热线人审误判数”和“热线咨询量”及相关月份数据。');
+                const countries = Object.keys(countryMap).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+                
+                if (countries.length === 0) {
+                    showMessage('未在文件中找到有效数据，请检查列名是否正确。');
                     return;
                 }
 
-                parsedRegions.forEach((region, index) => {
+                // 快速导航
+                countries.forEach((country, index) => {
                     const btn = document.createElement('a');
                     btn.href = `#chart-${index}`;
                     btn.className = 'px-3 py-1 bg-white border border-[#2e95db] text-[#2e95db] text-sm rounded-full hover:bg-[#2e95db] hover:text-white transition';
-                    btn.textContent = region;
+                    btn.textContent = country;
                     navContainer.appendChild(btn);
                 });
 
-                parsedRegions.forEach((region, index) => {
+                // 渲染图表
+                countries.forEach((country, index) => {
                     const card = document.createElement('div');
                     card.id = `chart-${index}`;
                     card.className = 'bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center overflow-x-auto max-w-full scroll-mt-6';
                     
-                    const chartWidth = Math.max(850, sortedMonths.length * 60); 
+                    const chartWidth = Math.max(454, sortedWeeks.length * 30);
                     const chartDiv = document.createElement('div');
                     chartDiv.style.width = chartWidth + 'px';
-                    chartDiv.style.height = '480px'; 
+                    chartDiv.style.height = '378px';
                     card.appendChild(chartDiv);
 
                     const downloadBtn = document.createElement('button');
                     downloadBtn.className = 'mt-4 px-4 py-2 border-2 border-[#2e95db] text-[#2e95db] text-sm font-semibold rounded hover:bg-[#2e95db] hover:text-white transition duration-200 flex items-center space-x-2';
-                    downloadBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg><span>下载 ${region} 高清PNG</span>`;
+                    downloadBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg><span>下载 ${country} 高清PNG</span>`;
                     card.appendChild(downloadBtn);
                     container.appendChild(card);
 
                     const xData = [];
                     const cData = [];
-                    const mHumanData = [];
+                    const mDataMachine = [];
+                    const mDataHuman = [];
 
-                    sortedMonths.forEach((month) => {
-                        xData.push(month);
-                        
-                        const dataObj = regionMap[region][month] || { consult: 0, misjudgeHuman: 0 };
-                        
-                        cData.push(getSafeLogData(dataObj.consult));
-                        mHumanData.push(getSafeLogData(dataObj.misjudgeHuman));
+                    sortedWeeks.forEach(week => {
+                        xData.push(week); // ✨ 直接推送格式化好的日期
+                        const dataObj = countryMap[country][week] || { consult: 0, machineMisjudge: 0, humanMisjudge: 0 };
+                        cData.push(dataObj.consult);
+                        mDataMachine.push(dataObj.machineMisjudge);
+                        mDataHuman.push(dataObj.humanMisjudge);
                     });
 
                     const chart = echarts.init(chartDiv);
                     chart.setOption({
                         backgroundColor: '#ffffff',
-                        title: { 
-                            text: region, 
-                            left: '10', 
-                            top: '10', 
-                            textStyle: { color: '#000000', fontSize: 20, fontWeight: 'bold' } 
-                        },
-                        tooltip: { 
-                            trigger: 'axis',
-                            textStyle: { fontSize: 14 }, 
-                            formatter: function (params) {
-                                let html = params[0].axisValue + ' 月份<br/>';
-                                params.forEach(p => {
-                                    if (p.data === null || p.data === undefined) return;
-                                    const realVal = p.data.realValue !== undefined ? p.data.realValue : '-';
-                                    html += `${p.marker} ${p.seriesName}: <span style="font-weight:bold">${realVal}</span><br/>`;
-                                });
-                                return html;
-                            }
-                        },
-                        legend: { 
-                            data: ['咨询量', '人审误判量'], 
-                            top: 15, 
-                            right: 60,
-                            itemWidth: 25, itemHeight: 14, 
-                            textStyle: { fontSize: 14, fontWeight: 'bold' } 
-                        },
-                        grid: { left: 60, right: 60, bottom: 60, top: 90, containLabel: true },
+                        title: { text: country, left: '10', top: '10', textStyle: { color: '#000000', fontSize: 16, fontWeight: 'bold' } },
+                        tooltip: { trigger: 'axis' },
+                        legend: { data: ['咨询与申诉量', '机审-误判', '人审-误判'], top: '10', right: '10' }, 
+                        grid: { left: '2%', right: '2%', bottom: '5%', top: '60', containLabel: true },
                         xAxis: { 
-                            type: 'category',
-                            name: '月份',
-                            nameTextStyle: {
-                                color: THEME_BLUE,
-                                fontWeight: 'bold',
-                                fontSize: 13
-                            },
+                            type: 'category', 
                             data: xData, 
-                            axisLabel: { color: THEME_BLUE, rotate: 45, fontSize: 13, fontWeight: 'bold' }, 
+                            axisLabel: { color: THEME_BLUE, rotate: 0, fontSize: 11 }, 
                             axisLine: { lineStyle: { color: THEME_BLUE } } 
                         },
-                        yAxis: {
-                            type: 'log',
-                            min: 1, 
-                            logBase: 10,
-                            axisLabel: { 
-                                color: THEME_BLUE, 
-                                fontSize: 12, 
-                                fontWeight: 'bold',
-                                formatter: function (value) {
-                                    if (value === 1) return '0';
-                                    return formatLabel(value);
-                                }
+                        yAxis: [
+                            { 
+                                type: 'value', 
+                                // 动态缩放：取当前数据最大值并乘以 1.2，确保顶部留有空间
+                                max: (value) => value.max > 0 ? Math.ceil(value.max * 1.2) : 10, 
+                                min: 0, // 锁定下限
+                                axisLabel: { color: THEME_BLUE, fontSize: 10 }, 
+                                splitLine: { lineStyle: { opacity: 0.15, type: 'dashed', color: THEME_BLUE } } 
                             },
-                            splitLine: { lineStyle: { opacity: 0.15, type: 'dashed', color: THEME_BLUE } }
-                        },
+                            { 
+                                type: 'value', 
+                                position: 'right',
+                                min: 0, // 锁定下限，防止沉底
+                                // 动态拉伸右侧 Y 轴：使其最大值为实际最大值的 3.5 倍。
+                                // 这样误判折线就会被压在整个画布的下三分之一处。
+                                max: (value) => Math.max(value.max * 3.5, 10), 
+                                axisLabel: { color: MACHINE_COLOR, fontSize: 10 }, 
+                                splitLine: { show: false }
+                            }
+                        ],
                         series: [
                             { 
-                                name: '咨询量', 
+                                name: '咨询与申诉量', 
                                 type: 'line', 
                                 data: cData, 
-                                symbolSize: 8, 
+                                yAxisIndex: 0,
                                 itemStyle: { color: THEME_BLUE }, 
-                                label: { 
-                                    show: true, 
-                                    position: 'top', 
-                                    color: THEME_BLUE,
-                                    textBorderColor: '#ffffff',
-                                    textBorderWidth: 4, 
-                                    formatter: (p) => formatLabel(p.data.realValue), 
-                                    fontSize: 16, 
-                                    fontWeight: 'bold' 
-                                },
-                                labelLayout: { moveOverlap: 'shiftY' } 
+                                label: { show: true, position: 'top', formatter: (p) => formatLabel(p.value), fontSize: 10, fontWeight: 'bold' } 
                             },
                             { 
-                                name: '人审误判量', 
+                                name: '机审-误判', 
                                 type: 'line', 
-                                data: mHumanData, 
-                                symbolSize: 8,
+                                data: mDataMachine, 
+                                yAxisIndex: 1, // 使用右侧 Y 轴
+                                itemStyle: { color: MACHINE_COLOR }, 
+                                label: { show: true, position: 'top', formatter: (p) => formatLabel(p.value), fontSize: 10, fontWeight: 'bold' } 
+                            },
+                            { 
+                                name: '人审-误判', 
+                                type: 'line', 
+                                data: mDataHuman, 
+                                yAxisIndex: 1, // 使用右侧 Y 轴
                                 itemStyle: { color: HUMAN_COLOR }, 
-                                label: { 
-                                    show: true, 
-                                    position: 'bottom', // 避免和顶部的咨询量标签重叠
-                                    color: HUMAN_COLOR, 
-                                    textBorderColor: '#ffffff',
-                                    textBorderWidth: 4,
-                                    formatter: (p) => formatLabel(p.data.realValue), 
-                                    fontSize: 16, 
-                                    fontWeight: 'bold' 
-                                },
-                                labelLayout: { moveOverlap: 'shiftY' } 
+                                label: { show: true, position: 'top', formatter: (p) => formatLabel(p.value), fontSize: 10, fontWeight: 'bold' } 
                             }
                         ]
                     });
                     
-                    const fileName = `${region}_咨询与人审误判对比图.png`;
+                    const fileName = `${country}_数据折线图.png`;
                     generatedCharts.push({ instance: chart, fileName: fileName });
 
                     downloadBtn.addEventListener('click', () => {
@@ -352,7 +332,7 @@
                     });
                 });
 
-                showMessage(`成功生成 ${parsedRegions.length} 个大区的图表！`, false);
+                showMessage(`成功生成 ${countries.length} 个地区的图表！`, false);
                 if (generatedCharts.length > 0) batchDownloadBtn.classList.remove('hidden');
 
             } catch (error) {
@@ -373,7 +353,7 @@
                     zip.file(item.fileName, url.split(',')[1], { base64: true });
                 });
                 const content = await zip.generateAsync({ type: "blob" });
-                saveAs(content, "全部热线对比图_双线版.zip");
+                saveAs(content, "全部热线数据图表.zip");
             } catch (err) {
                 alert('打包失败');
             } finally {
